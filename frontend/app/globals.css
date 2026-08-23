@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --font-display: "Space Grotesk";
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: radial-gradient(circle at top left, rgba(56, 189, 248, 0.16), transparent 32%), #020617;
+  color: #e2e8f0;
+}
+
+* {
+  box-sizing: border-box;
+}
