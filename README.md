@@ -49,6 +49,13 @@ On Windows PowerShell:
 .\scripts\dev.ps1
 ```
 
+## Deploy for $0
+
+Backend on Render, frontend on Vercel, no cost:
+
+- Step-by-step guide: [`DEPLOY.md`](./DEPLOY.md)
+- Render Blueprint: [`render.yaml`](./render.yaml)
+
 ## Current Prototype Scope
 
 - Mock Mode Simulator with seven cognitive presets

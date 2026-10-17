@@ -24,7 +24,7 @@ function Meter({ label, value }: { label: string; value: number }) {
 export function Dashboard() {
   const frame = useBridgeStore((state) => state.frame);
   const preset = useBridgeStore((state) => state.preset);
-  const connected = useBridgeStore((state) => state.connected);
+  const status = useBridgeStore((state) => state.status);
   const setPreset = useBridgeStore((state) => state.setPreset);
 
   return (
@@ -34,7 +34,13 @@ export function Dashboard() {
         <div className="space-y-6">
           <div className="flex items-center justify-between gap-4">
             <span className="rounded-full border border-cyan-300/30 px-3 py-1 text-xs uppercase tracking-[0.35em] text-cyan-200">Neural Bridge</span>
-            <span className={connected ? "text-sm text-emerald-300" : "text-sm text-rose-300"}>{connected ? "Live Stream" : "Disconnected"}</span>
+            <span
+              className={`text-sm ${
+                status === "live" ? "text-emerald-300" : status === "connecting" ? "text-amber-300" : "text-rose-300"
+              }`}
+            >
+              {status === "live" ? "Live Stream" : status === "connecting" ? "Waking server…" : "Disconnected"}
+            </span>
           </div>
           <div className="space-y-4">
             <h1 className="text-4xl font-semibold tracking-[-0.04em] text-white md:text-6xl">Pure cognitive execution layer.</h1>

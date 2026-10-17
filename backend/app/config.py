@@ -15,6 +15,9 @@ class Settings:
         for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
         if origin.strip()
     ]
+    # Optional regex for origins that cannot be listed explicitly, e.g. Vercel
+    # preview deployments: https://.*\.vercel\.app
+    cors_origin_regex: str | None = os.getenv("CORS_ORIGIN_REGEX") or None
     gemini_api_key: str | None = os.getenv("GEMINI_API_KEY") or None
     secret_key: str | None = os.getenv("SECRET_KEY") or None
     jwt_secret: str | None = os.getenv("JWT_SECRET") or None

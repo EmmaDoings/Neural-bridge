@@ -1,0 +1,28 @@
+# Render Blueprint for the Neural Bridge FastAPI backend.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> select this repository.
+# The free plan sleeps after ~15 minutes of inactivity and cold-starts in ~50s,
+# so the Next.js frontend auto-reconnects (see components/TelemetrySocket.tsx).
+services:
+  - type: web
+    name: neural-bridge-api
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    # Render injects $PORT; the app must bind to it or it will fail health checks.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: NEURAL_BRIDGE_MODE
+        value: mock
+      # Set to your Vercel production origin, e.g. https://neural-bridge.vercel.app
+      - key: CORS_ORIGINS
+        sync: false
+      # Optional: allow Vercel preview deployments, e.g. https://.*\.vercel\.app
+      - key: CORS_ORIGIN_REGEX
+        sync: false
