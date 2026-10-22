@@ -22,17 +22,27 @@ This repo ships a [`render.yaml`](./render.yaml) Blueprint, so you can skip most
 of the manual setup.
 
 1. Render Dashboard → **New** → **Blueprint** → select this repository.
-2. Render reads `render.yaml` and asks for the two secrets marked `sync: false`:
+2. Render reads `render.yaml` and asks for the secrets marked `sync: false`:
    - **`CORS_ORIGINS`** → leave blank for now, set it in step 4.
    - **`CORS_ORIGIN_REGEX`** → optional, e.g. `https://.*\.vercel\.app` to allow
      Vercel preview deployments.
+   - **`DEVICE_REGISTRATION_KEY`** → optional but recommended before connecting
+     a bridge over the public internet. Set the same value locally as
+     `NB_DEVICE_REGISTRATION_KEY`.
+   - **`GEMINI_API_KEY`** → optional. Set it to enable Gemini; leave it blank to
+     use the deterministic fallback. Never expose it to the frontend.
 3. Apply. Render builds `backend/` and starts:
    ```
    uvicorn app.main:app --host 0.0.0.0 --port $PORT
    ```
+   `render.yaml` also sets `GEMINI_MODEL=gemini-2.5-flash`,
+   `GEMINI_THINKING_BUDGET=0`, `GEMINI_MAX_OUTPUT_TOKENS=160`, and
+   `GEMINI_TIMEOUT_SECONDS=8`.
 4. Verify:
    - `https://<service>.onrender.com/health` → `{"status":"ok","mode":"mock"}`
    - `wss://<service>.onrender.com/ws/telemetry` streams telemetry frames.
+   - `POST https://<service>.onrender.com/intent/respond` returns
+     `provider: "gemini"` when the key is set, or `"fallback"` otherwise.
 
 **Prefer clicking through manually?** New → **Web Service** with:
 
@@ -91,6 +101,10 @@ of the manual setup.
    - `NEXT_PUBLIC_*` values are inlined at **build time**, so changing them
      requires a **Redeploy** (Deployments → ⋯ → Redeploy).
 4. Deploy and note the URL, e.g. `https://neural-bridge.vercel.app`.
+
+> The deployed site must be built from the current commit. An older deployment
+> will return 404 for `/settings` and will not show the source selector or the
+> voice panel; redeploy after pulling the latest changes.
 
 See [`frontend/.env.example`](./frontend/.env.example) for local defaults.
 
@@ -155,6 +169,8 @@ To use the deployed backend as a live (non-mock) source:
 
 The device registry is in-memory, so a Render restart invalidates the bridge's
 key. The bridge re-registers automatically on HTTP 403 or close code `4401`.
+When `DEVICE_REGISTRATION_KEY` is configured, also set the matching local
+`NB_DEVICE_REGISTRATION_KEY` before starting the bridge.
 
 ### Verify the bridge contract
 
@@ -173,6 +189,13 @@ self-echo, and a valid synthetic stream.
 
 - `NEXT_PUBLIC_*` values ship to every browser — treat them as public. The device
   API keys returned by `POST /devices` are the real credentials and stay in memory.
+- Set `GEMINI_API_KEY` only on the Render backend. Configure the optional
+  `GEMINI_MODEL`, `GEMINI_TIMEOUT_SECONDS`, `GEMINI_MAX_OUTPUT_TOKENS`,
+  `GEMINI_THINKING_BUDGET`, and `INTENT_RATE_LIMIT_SECONDS` there as well; none
+  belongs in Vercel.
+- `/intent/respond` is rate-limited per client IP (default one request every
+  3 seconds) but has no user login. Treat it as a public demo endpoint and set a
+  budget alert in Google AI Studio.
 - Generate backend-only secrets on Render with:
   ```
   python -c "import secrets; print(secrets.token_hex(32))"

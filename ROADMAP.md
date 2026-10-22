@@ -4,11 +4,14 @@ Goal: replace the mock EEG loop with **real biological data from an OpenBCI Cyto
 existing intent engine and 3D hologram, and add a Gemini-backed response loop — while keeping the
 deployed stack at **$0**.
 
-Status: **v0.3** — the local bridge, three source modes, and the backend
-contract are implemented and verified against BrainFlow's synthetic board
-(32 unit tests + `scripts/verify_pipeline.py`). Real Cyton validation, Gemini,
-voice, and CI are pending. The deployed backend still runs the mock generator
-(`mode: mock`).
+Status: **v0.5.1** — the local bridge, three source modes, Gemini response loop,
+and backend contract are implemented and verified against BrainFlow's synthetic board
+(32 bridge unit tests + 7 backend tests + `scripts/verify_pipeline.py`). Device
+enrollment can now be protected with a registration secret; device commands and
+deletion require the device API key. Real Cyton validation remains pending physical
+hardware; the repository now includes a local validation runner. The deployed backend
+still runs the mock generator (`mode: mock`), and the deployed frontend predates
+`/settings`, the source selector, and `/intent/respond`; redeploy to pick them up.
 
 ---
 
@@ -34,7 +37,7 @@ Render backend  ──publish("*")──▶  WS /ws/telemetry  ──▶  Vercel
 - `localhost` in the browser is the *viewer's* machine, not the machine running BrainFlow.
 - `NEXT_PUBLIC_WS_URL` is inlined at build time, so one bundle cannot point at each user's laptop.
 
-The device socket above already exists and rebroadcasts to the topic the frontend subscribes to.
+The device socket above already exists and rebroadcasts to the topic the frontend subscribes to. Hardware mode subscribes with `?kind=eeg`, so it excludes mock frames even when a local backend also runs the simulator.
 
 ---
 
@@ -118,34 +121,46 @@ and a re-seat stress test.
 **Verified on synthetic data and unit tests. Pending:** real jaw-clench tuning
 (false positives during speech). **Not implemented:** frontal blink detection.
 
-### Phase 4 — LLM bridge (Gemini) — next
+### Phase 4 — LLM bridge (Gemini) — ✅ implemented
 
+- `POST /intent/respond` receives a validated telemetry frame and optional
+  transcript. It requires either a triggered frame or a transcript.
 - Key stays server-side (`GEMINI_API_KEY`); never `NEXT_PUBLIC_*`.
-- New `POST /intent/respond` (or an ingest hook): fires only on `triggered`, with mode context.
-- Hard timeout (~8 s) + deterministic-parser fallback.
-- Rate limit (e.g. 1 request / 3 s) and token cap; log latency and cost.
-- Configurable Flash model via env; no hardcoded model name.
+- The configurable `GEMINI_MODEL` call has an ~8 s timeout, output cap, and
+  deterministic fallback response. "Thinking" is disabled by default
+  (`GEMINI_THINKING_BUDGET=0`) so a short output cap cannot truncate the answer;
+  incomplete `MAX_TOKENS` responses are rejected and replaced by the fallback.
+- The process-local rate limiter defaults to one request per 3 seconds **per
+  client IP** (honouring `X-Forwarded-For` behind Render's proxy).
 
-**Done when:** conversation/creative modes respond to a real sustained state, and fail gracefully.
+**Still pending:** production request authentication, a global daily quota, and
+structured cost/latency telemetry.
 
-### Phase 5 — Voice I/O — planned
+### Phase 5 — Voice I/O — ✅ browser v1
 
-- v1 (free, no new service): browser Web Speech API for STT + `speechSynthesis` for TTS.
-- Audio → transcript → `/intent/respond` with the current frame context.
-- Typed-input fallback for browsers without Web Speech.
+- Browser Web Speech API captures speech where supported; `speechSynthesis`
+  reads responses aloud.
+- Voice and typed input call `/intent/respond` with the current frame context.
+- Typed input remains available when browser speech recognition is unavailable.
 - Later: server-side STT/TTS if quality matters more than $0.
 
-**Done when:** you can speak, see the transcript, and hear a reply that references your cognitive state.
+**Still pending:** cross-browser manual testing with Chrome/Edge and a decision
+on whether server-side STT/TTS is needed.
 
 ### Phase 6 — Hardening — 🚧 partial
 
 - ✅ 32 bridge unit tests (pytest) and `scripts/verify_pipeline.py` for the
   backend contract + synthetic pipeline.
 - ✅ Frontend `typecheck`, `lint`, and production `build` pass.
-- ⬜ pytest + `httpx` for the backend API surface; Playwright for the flows we
-  verified manually.
-- ⬜ GitHub Actions: typecheck, lint, build, pytest, Playwright.
-- ⬜ Auth on `POST /devices` (registration secret) and `/intent/respond`.
+- ✅ Backend pytest + `httpx` coverage for enrollment auth, API-key mutation
+  protection, response fallback, validation, per-IP rate limiting, truncation
+  handling, and timeout fallback.
+- ✅ GitHub Actions workflow covers frontend typecheck/lint/build, backend tests,
+  bridge tests, and the synthetic E2E pipeline; the same commands pass locally.
+  The first hosted run is pending the next push.
+- ⬜ Playwright coverage for browser flows.
+- ✅ Optional registration secret on `POST /devices`; device commands and deletion require the per-device API key.
+- ⬜ Authentication and a global daily quota for `/intent/respond` (per-IP rate limiting is implemented).
 - ⬜ Keep-alive monitor on `/health`; structured logs; Sentry free tier optional.
 - Persistence: in-memory is fine for demos; Neon/Supabase free Postgres if
   history is needed.
@@ -157,11 +172,14 @@ and a re-seat stress test.
 - ✅ Option page (`/settings`) with Demo / Online / Hardware, persisted in
   `localStorage`; URL resolution in `lib/source.ts`.
 - ✅ `TelemetrySocket.tsx`: browser-side demo interval; WS for online/hardware;
-  reconnect/backoff; mixed-content guard; preset push with device-command fallback.
+  reconnect/backoff; mixed-content guard; hardware filtering to EEG sources.
+- ℹ️ The browser no longer sends hardware commands because it must never hold a
+  device API key. A future authenticated operator control path can expose
+  selected commands safely.
 - ✅ Store: `source`, `triggered`, connection status; source badge and mode-specific copy.
 - ✅ Demo simulator: faithful TS port of `backend/app/simulator.py`.
 - ⬜ `Hologram.tsx`: react to discrete `action` events (mode switch, select).
-- ⬜ Voice panel (Web Speech API + typed fallback).
+- ✅ Voice panel with browser speech recognition, speech synthesis, and typed fallback.
 
 ## 5. Backend changes
 
@@ -169,8 +187,12 @@ and a re-seat stress test.
 - ✅ `TelemetryFrame.triggered: bool = False`.
 - ✅ Malformed device frames are ignored instead of closing the socket.
 - ✅ A device's own frames are filtered out of its device-socket echo.
-- ⬜ `app/llm.py` + `POST /intent/respond` (Gemini, timeout, fallback, rate limit).
-- ⬜ Registration secret + auth/rate limiting on device and LLM endpoints.
+- ✅ Device command queue reports saturation as HTTP 429 instead of failing with
+  an internal server error.
+- ✅ Device removal and commands require the device API key; bridge enrollment
+  optionally requires `DEVICE_REGISTRATION_KEY`.
+- ✅ `app/llm.py` + `POST /intent/respond` (Gemini, timeout, fallback, per-IP rate limit, thinking disabled).
+- ⬜ Broader API/WebSocket tests (source filtering, command saturation) and LLM authentication.
 - ℹ️ Metrics/intent live in the local bridge (fast tuning, no backend hardware
   dependency); the backend stays a transport/broadcast layer.
 
@@ -186,7 +208,8 @@ and a re-seat stress test.
 | EEG signal quality | OpenBCI GUI impedance check first; relative band power; calibration |
 | EMG false positives | hysteresis, cooldown, temporal-channel focus |
 | Web Speech API support | Chrome/Edge only; keep a typed fallback |
-| LLM cost/latency | trigger-only, rate limit, timeout, fallback |
+| LLM cost/latency | per-IP rate limit, timeout, thinking disabled, fallback |
+| Public `/intent/respond` abuse | per-IP rate limit + CORS; add a daily quota/auth before sharing widely |
 
 ## 7. Cost
 

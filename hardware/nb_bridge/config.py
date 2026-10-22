@@ -9,9 +9,15 @@ against the BrainFlow synthetic board. Real hardware is opt-in:
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from urllib.parse import urlparse
+
+from nb_common.config import (
+    ConfigError,
+    get_env,
+    get_float,
+    get_int,
+    validate_http_url,
+)
 
 DEFAULT_API_BASE = "https://neural-bridge-api.onrender.com"
 
@@ -26,50 +32,6 @@ VALID_PRESETS = (
     "navigation",
     "idle",
 )
-
-
-class ConfigError(ValueError):
-    """Raised when an environment variable cannot be turned into a config."""
-
-
-def _get(name: str, default: str | None = None) -> str | None:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    raw = raw.strip()
-    return raw or default
-
-
-def _get_float(name: str, default: float, minimum: float | None = None) -> float:
-    raw = _get(name)
-    if raw is None:
-        return default
-    try:
-        value = float(raw)
-    except ValueError as exc:
-        raise ConfigError(f"{name} must be a number, got {raw!r}") from exc
-    if minimum is not None and value < minimum:
-        raise ConfigError(f"{name} must be >= {minimum}, got {value}")
-    return value
-
-
-def _get_int(name: str, default: int, minimum: int | None = None) -> int:
-    value = _get_float(name, float(default))
-    if minimum is not None and value < minimum:
-        raise ConfigError(f"{name} must be >= {minimum}, got {value}")
-    return int(value)
-
-
-def _get_bool(name: str, default: bool) -> bool:
-    raw = _get(name)
-    if raw is None:
-        return default
-    lowered = raw.lower()
-    if lowered in ("1", "true", "yes", "on"):
-        return True
-    if lowered in ("0", "false", "no", "off"):
-        return False
-    raise ConfigError(f"{name} must be a boolean, got {raw!r}")
 
 
 @dataclass(frozen=True)
@@ -94,73 +56,73 @@ class BridgeConfig:
     emg_ratio_threshold: float
     emg_frames: int
     request_timeout: float
+    registration_key: str | None
     log_level: str
 
     @classmethod
     def from_env(cls) -> "BridgeConfig":
-        api_base = (_get("NB_API_BASE", DEFAULT_API_BASE) or DEFAULT_API_BASE).rstrip("/")
-        parsed = urlparse(api_base)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ConfigError(
-                f"NB_API_BASE must be an http(s) URL, got {api_base!r}"
-            )
+        api_base = validate_http_url(
+            "NB_API_BASE",
+            get_env("NB_API_BASE", DEFAULT_API_BASE) or DEFAULT_API_BASE,
+        )
 
-        board = (_get("NB_BOARD", "synthetic") or "synthetic").lower()
+        board = (get_env("NB_BOARD", "synthetic") or "synthetic").lower()
         if board not in VALID_BOARDS:
             raise ConfigError(
                 f"NB_BOARD must be one of {', '.join(VALID_BOARDS)}, got {board!r}"
             )
 
-        serial_port = _get("NB_SERIAL_PORT")
+        serial_port = get_env("NB_SERIAL_PORT")
         if board != "synthetic" and not serial_port:
             raise ConfigError(
                 f"NB_SERIAL_PORT is required when NB_BOARD={board} "
                 "(for example COM3 on Windows or /dev/ttyUSB0 on Linux)"
             )
 
-        preset = (_get("NB_PRESET", "conversation") or "conversation").lower()
+        preset = (get_env("NB_PRESET", "conversation") or "conversation").lower()
         if preset not in VALID_PRESETS:
             raise ConfigError(
                 f"NB_PRESET must be one of {', '.join(VALID_PRESETS)}, got {preset!r}"
             )
 
-        emg_low = _get_float("NB_EMG_LOW_HZ", 30.0, minimum=1.0)
-        emg_high = _get_float("NB_EMG_HIGH_HZ", 100.0, minimum=emg_low + 1.0)
+        emg_low = get_float("NB_EMG_LOW_HZ", 30.0, minimum=1.0)
+        emg_high = get_float("NB_EMG_HIGH_HZ", 100.0, minimum=emg_low + 1.0)
 
-        update_hz = _get_float("NB_UPDATE_HZ", 5.0, minimum=0.5)
+        update_hz = get_float("NB_UPDATE_HZ", 5.0, minimum=0.5)
         if update_hz > 30.0:
             raise ConfigError(f"NB_UPDATE_HZ must be <= 30, got {update_hz}")
 
-        window_seconds = _get_float("NB_WINDOW_SECONDS", 2.0, minimum=1.0)
+        window_seconds = get_float("NB_WINDOW_SECONDS", 2.0, minimum=1.0)
         if window_seconds > 10.0:
             raise ConfigError(f"NB_WINDOW_SECONDS must be <= 10, got {window_seconds}")
 
         return cls(
             api_base=api_base,
-            device_name=_get("NB_DEVICE_NAME", "openbci-cyton") or "openbci-cyton",
-            device_kind=_get("NB_DEVICE_KIND", "eeg") or "eeg",
+            device_name=get_env("NB_DEVICE_NAME", "openbci-cyton") or "openbci-cyton",
+            device_kind=get_env("NB_DEVICE_KIND", "eeg") or "eeg",
             board=board,
             serial_port=serial_port,
             preset=preset,
             update_hz=update_hz,
             window_seconds=window_seconds,
-            ema_alpha=_get_float("NB_EMA_ALPHA", 0.2, minimum=0.01),
-            calibration_seconds=_get_float("NB_CALIBRATION_SECONDS", 60.0, minimum=0.0),
+            ema_alpha=get_float("NB_EMA_ALPHA", 0.2, minimum=0.01),
+            calibration_seconds=get_float("NB_CALIBRATION_SECONDS", 60.0, minimum=0.0),
             emg_band=(emg_low, emg_high),
-            intent_focus_enter=_get_float("NB_INTENT_FOCUS_ENTER", 0.85),
-            intent_focus_release=_get_float("NB_INTENT_FOCUS_RELEASE", 0.75),
-            intent_sustain_seconds=_get_float(
+            intent_focus_enter=get_float("NB_INTENT_FOCUS_ENTER", 0.85),
+            intent_focus_release=get_float("NB_INTENT_FOCUS_RELEASE", 0.75),
+            intent_sustain_seconds=get_float(
                 "NB_INTENT_SUSTAIN_SECONDS", 1.5, minimum=0.0
             ),
-            intent_cooldown_seconds=_get_float(
+            intent_cooldown_seconds=get_float(
                 "NB_INTENT_COOLDOWN_SECONDS", 4.0, minimum=0.0
             ),
-            emg_ratio_threshold=_get_float(
+            emg_ratio_threshold=get_float(
                 "NB_EMG_RATIO_THRESHOLD", 2.5, minimum=1.0
             ),
-            emg_frames=_get_int("NB_EMG_FRAMES", 2, minimum=1),
-            request_timeout=_get_float("NB_REQUEST_TIMEOUT", 60.0, minimum=1.0),
-            log_level=(_get("NB_LOG_LEVEL", "INFO") or "INFO").upper(),
+            emg_frames=get_int("NB_EMG_FRAMES", 2, minimum=1),
+            request_timeout=get_float("NB_REQUEST_TIMEOUT", 60.0, minimum=1.0),
+            registration_key=get_env("NB_DEVICE_REGISTRATION_KEY"),
+            log_level=(get_env("NB_LOG_LEVEL", "INFO") or "INFO").upper(),
         )
 
     @property

@@ -1,14 +1,30 @@
 import asyncio
 import json
+import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from app.config import settings
 from app.device_bus import bus
-from app.models import DeviceCommand, DeviceRegistration, PresetName, TelemetryFrame
+from app.llm import intent_service
+from app.models import (
+    DeviceCommand,
+    DeviceRegistration,
+    IntentRespondRequest,
+    IntentRespondResult,
+    PresetName,
+    TelemetryFrame,
+)
 from app.simulator import PRESETS, generate_frame
 
 
@@ -63,6 +79,17 @@ async def telemetry(preset: PresetName = "conversation"):
     return generate_frame(preset)
 
 
+@app.post("/intent/respond", response_model=IntentRespondResult)
+async def respond_to_intent(
+    request: IntentRespondRequest, http_request: Request
+) -> IntentRespondResult:
+    forwarded = http_request.headers.get("x-forwarded-for", "")
+    client_key = forwarded.split(",")[0].strip()
+    if not client_key:
+        client_key = http_request.client.host if http_request.client else "unknown"
+    return await intent_service.respond(request, client_key=client_key)
+
+
 @app.put("/simulation/preset/{preset}")
 async def set_simulation_preset(preset: PresetName) -> dict[str, str]:
     mock_id = getattr(app.state, "mock_device_id", None)
@@ -80,7 +107,14 @@ async def list_devices() -> list[dict]:
 
 
 @app.post("/devices")
-async def register_device(registration: DeviceRegistration) -> dict:
+async def register_device(
+    registration: DeviceRegistration,
+    x_registration_key: str | None = Header(default=None),
+) -> dict:
+    if settings.device_registration_key is not None and not secrets.compare_digest(
+        x_registration_key or "", settings.device_registration_key
+    ):
+        raise HTTPException(status_code=401, detail="invalid registration key")
     device = bus.register(registration.name, registration.kind)
     return {
         "id": device["id"],
@@ -91,7 +125,11 @@ async def register_device(registration: DeviceRegistration) -> dict:
 
 
 @app.delete("/devices/{device_id}")
-async def remove_device(device_id: str) -> dict[str, str]:
+async def remove_device(
+    device_id: str, x_api_key: str | None = Header(default=None)
+) -> dict[str, str]:
+    if not bus.authenticate(device_id, x_api_key):
+        raise HTTPException(status_code=401, detail="invalid api key")
     if not bus.remove(device_id):
         raise HTTPException(status_code=404, detail="device not found")
     return {"status": "removed"}
@@ -111,16 +149,25 @@ async def ingest_telemetry(
 
 
 @app.post("/devices/{device_id}/command")
-async def send_device_command(device_id: str, command: DeviceCommand) -> dict[str, str]:
-    delivered = await bus.send_command(device_id, command.model_dump())
-    if not delivered:
+async def send_device_command(
+    device_id: str,
+    command: DeviceCommand,
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, str]:
+    if not bus.authenticate(device_id, x_api_key):
+        raise HTTPException(status_code=401, detail="invalid api key")
+    status = await bus.send_command(device_id, command.model_dump())
+    if status == "not_connected":
         raise HTTPException(status_code=404, detail="device is not connected")
+    if status == "full":
+        raise HTTPException(status_code=429, detail="device command queue is full")
     return {"status": "queued", "device": device_id}
 
 
 @app.websocket("/ws/telemetry")
 async def telemetry_socket(websocket: WebSocket) -> None:
     await websocket.accept()
+    source_kind = websocket.query_params.get("kind")
     channel = bus.subscribe("*")
     get_task: asyncio.Task | None = None
     recv_task = asyncio.create_task(websocket.receive())
@@ -138,6 +185,8 @@ async def telemetry_socket(websocket: WebSocket) -> None:
                 get_task.cancel()
                 continue
             payload = get_task.result()
+            if source_kind is not None and bus.kind(payload.get("source")) != source_kind:
+                continue
             await websocket.send_json(payload)
     except WebSocketDisconnect:
         pass

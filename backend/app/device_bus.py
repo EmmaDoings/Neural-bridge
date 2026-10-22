@@ -1,7 +1,7 @@
 import asyncio
 import secrets
 import time
-from typing import Any
+from typing import Any, Literal
 
 
 class DeviceBus:
@@ -45,6 +45,12 @@ class DeviceBus:
     def get(self, device_id: str) -> dict[str, Any] | None:
         return self._devices.get(device_id)
 
+    def kind(self, device_id: str | None) -> str | None:
+        if device_id is None:
+            return None
+        device = self._devices.get(device_id)
+        return str(device["kind"]) if device else None
+
     def remove(self, device_id: str) -> bool:
         if device_id not in self._devices:
             return False
@@ -53,8 +59,12 @@ class DeviceBus:
         return True
 
     def authenticate(self, device_id: str, api_key: str | None) -> bool:
+        if api_key is None:
+            return False
         device = self._devices.get(device_id)
-        return bool(device and device["api_key"] == api_key)
+        if not device:
+            return False
+        return secrets.compare_digest(str(device["api_key"]), api_key)
 
     def mark_connected(self, device_id: str, connected: bool) -> None:
         device = self._devices.get(device_id)
@@ -87,11 +97,16 @@ class DeviceBus:
     def command_queue(self, device_id: str) -> asyncio.Queue:
         return self._commands.setdefault(device_id, asyncio.Queue(maxsize=64))
 
-    async def send_command(self, device_id: str, payload: dict[str, Any]) -> bool:
+    async def send_command(
+        self, device_id: str, payload: dict[str, Any]
+    ) -> Literal["queued", "not_connected", "full"]:
         if device_id not in self._commands:
-            return False
-        self._commands[device_id].put_nowait(payload)
-        return True
+            return "not_connected"
+        commands = self._commands[device_id]
+        if commands.full():
+            return "full"
+        commands.put_nowait(payload)
+        return "queued"
 
 
 bus = DeviceBus()

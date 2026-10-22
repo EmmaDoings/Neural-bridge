@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { Hologram } from "./Hologram";
 import { TelemetrySocket } from "./TelemetrySocket";
-import { SOURCE_OPTIONS } from "@/lib/source";
+import { VoicePanel } from "./VoicePanel";
+import { resolveSource, SOURCE_OPTIONS } from "@/lib/source";
 import { useBridgeStore } from "@/lib/store";
 import type { PresetName } from "@/lib/types";
 
@@ -37,6 +38,7 @@ export function Dashboard() {
   const setPreset = useBridgeStore((state) => state.setPreset);
 
   const sourceOption = SOURCE_OPTIONS[source];
+  const { apiUrl } = resolveSource(source);
   const description =
     source === "demo"
       ? "Simulated EEG telemetry is interpreted as intent and reflected through a real-time holographic control surface."
@@ -120,6 +122,7 @@ export function Dashboard() {
             <p className="mt-2 text-sm leading-6 text-slate-300">{frame?.intent.action ?? "maintain passive telemetry loop"}</p>
           </div>
         </div>
+        <VoicePanel apiUrl={apiUrl} frame={frame} />
       </section>
     </main>
   );

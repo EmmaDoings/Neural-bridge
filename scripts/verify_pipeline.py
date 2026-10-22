@@ -52,11 +52,11 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def post_json(url: str, payload: dict) -> dict:
+def post_json(url: str, payload: dict, headers: dict[str, str] | None = None) -> dict:
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **(headers or {})},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
@@ -99,11 +99,13 @@ def sample_frame(label: str, triggered: bool) -> dict:
 
 async def contract_check(base: str, port: int) -> None:
     registration = post_json(
-        f"{base}/devices", {"name": "verify-device", "kind": "eeg"}
+        f"{base}/devices",
+        {"name": "verify-device", "kind": "eeg"},
+        {"X-Registration-Key": "verify-registration-key"},
     )
     device_id = registration["id"]
     api_key = registration["api_key"]
-    telemetry_url = f"ws://127.0.0.1:{port}/ws/telemetry"
+    telemetry_url = f"ws://127.0.0.1:{port}/ws/telemetry?kind=eeg"
     device_url = (
         f"ws://127.0.0.1:{port}/ws/devices/{device_id}?api_key={api_key}"
     )
@@ -136,9 +138,21 @@ async def contract_check(base: str, port: int) -> None:
             assert second["intent"]["label"] == "second", second
             assert second["triggered"] is False, second
 
+            # A device credential is required to issue physical commands.
+            try:
+                post_json(
+                    f"{base}/devices/{device_id}/command",
+                    {"action": "set_preset", "payload": {"preset": "gaming"}},
+                )
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 401, exc
+            else:
+                raise AssertionError("unauthenticated command was accepted")
+
             post_json(
                 f"{base}/devices/{device_id}/command",
                 {"action": "set_preset", "payload": {"preset": "gaming"}},
+                {"X-Api-Key": api_key},
             )
             command = json.loads(await asyncio.wait_for(device.recv(), 5))
             assert command["type"] == "command", command
@@ -154,7 +168,9 @@ async def contract_check(base: str, port: int) -> None:
     finally:
         try:
             request = urllib.request.Request(
-                f"{base}/devices/{device_id}", method="DELETE"
+                f"{base}/devices/{device_id}",
+                headers={"X-Api-Key": api_key},
+                method="DELETE",
             )
             with urllib.request.urlopen(request, timeout=10):
                 pass
@@ -186,6 +202,7 @@ def run_bridge_check(base: str, port: int, bridge_python: Path) -> list[dict]:
             "NB_UPDATE_HZ": "5",
             "NB_CALIBRATION_SECONDS": "0",
             "NB_LOG_LEVEL": "WARNING",
+            "NB_DEVICE_REGISTRATION_KEY": "verify-registration-key",
         }
     )
     bridge = subprocess.Popen(
@@ -230,7 +247,10 @@ def main() -> int:
     base = f"http://127.0.0.1:{port}"
     backend_env = os.environ.copy()
     backend_env["NEURAL_BRIDGE_MODE"] = "live"
-    backend_env["NEURAL_BRIDGE_CORS_ORIGINS"] = "*"
+    # The verifier has no browser origin and must never spend a Gemini call.
+    backend_env["CORS_ORIGINS"] = "http://localhost:3000"
+    backend_env["GEMINI_API_KEY"] = ""
+    backend_env["DEVICE_REGISTRATION_KEY"] = "verify-registration-key"
 
     backend = subprocess.Popen(
         [

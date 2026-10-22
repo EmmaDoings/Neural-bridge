@@ -96,6 +96,19 @@ $env:NB_SERIAL_PORT="COM3"
 .\.venv\Scripts\python -m nb_bridge
 ```
 
+### Validate a real Cyton before streaming
+
+First check impedance and the signal in the OpenBCI GUI. Then, with the GUI
+closed so it releases the serial port, collect a 30-second local validation
+sample. The command checks that at least 80% of expected metric windows produce
+valid telemetry; it does not transmit telemetry to the backend.
+
+```powershell
+$env:NB_BOARD="cyton"
+$env:NB_SERIAL_PORT="COM3"
+.\.venv\Scripts\python validate_cyton.py --seconds 30
+```
+
 Cyton + Daisy is supported with `NB_BOARD=cyton_daisy`; it streams 16 EEG
 channels at 125 Hz. The default region map expects the standard 10–20 names
 (`Fp1`, `Fp2`, `C3`, `C4`, `P7`, `P8`, `O1`, `O2` for a Cyton).
@@ -158,6 +171,7 @@ Every variable is optional. Defaults are safe for a synthetic run.
 | `NB_EMG_RATIO_THRESHOLD` | `2.5` | Clench detection threshold |
 | `NB_EMG_FRAMES` | `2` | Consecutive frames above threshold |
 | `NB_REQUEST_TIMEOUT` | `60.0` | Registration/health timeout (Render cold starts) |
+| `NB_DEVICE_REGISTRATION_KEY` | — | Matches `DEVICE_REGISTRATION_KEY` when the backend protects enrollment |
 | `NB_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
 `NB_API_BASE` must include a scheme. Non-synthetic boards require
@@ -173,8 +187,9 @@ The device socket also delivers commands. The bridge handles:
 | `calibrate` | `{"seconds": 30}` | Restarts baseline capture |
 | `ping` | — | Logged at debug level |
 
-The dashboard's preset buttons send `set_preset` to the first connected `eeg`
-device when the mock-only `PUT /simulation/preset/{preset}` endpoint is absent.
+Commands require the target device's API key, so browser preset buttons only
+control the mock generator. Issue hardware commands from a trusted operator
+tool that holds the device key; do not expose that key to the browser.
 
 ## Metrics and intent
 

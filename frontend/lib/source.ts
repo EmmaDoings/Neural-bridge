@@ -60,6 +60,8 @@ const localWsUrl = () =>
   process.env.NEXT_PUBLIC_LOCAL_WS_URL ??
   `${localApiUrl().replace(/^http/, "ws")}/ws/telemetry`;
 
+const withQuery = (url: string, query: string) => `${url}${url.includes("?") ? "&" : "?"}${query}`;
+
 export type ResolvedSource = {
   mode: SourceMode;
   option: SourceOption;
@@ -77,7 +79,9 @@ export function resolveSource(mode: SourceMode): ResolvedSource {
       mode,
       option: SOURCE_OPTIONS[mode],
       apiUrl: localApiUrl(),
-      wsUrl: localWsUrl()
+      // Hardware mode must not display the local mock generator when both
+      // it and an EEG bridge are connected to the same backend.
+      wsUrl: withQuery(localWsUrl(), "kind=eeg")
     };
   }
   return {

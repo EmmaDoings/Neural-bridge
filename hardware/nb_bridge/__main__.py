@@ -265,7 +265,11 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("%s", exc)
         return 1
 
-    client = DeviceClient(config, on_command=producer.on_command)
+    client = DeviceClient(
+        config,
+        on_command=producer.on_command,
+        fatal_exceptions=(BoardUnavailable,),
+    )
 
     async def runner() -> None:
         task = asyncio.create_task(client.run(producer.produce))

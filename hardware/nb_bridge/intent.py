@@ -11,8 +11,9 @@ a stream of metrics into rare, deliberate intents using four guards:
 A second channel triggers on jaw-clench EMG: the band-passed RMS must exceed
 an adaptive baseline by ``emg_ratio_threshold`` for ``emg_frames`` in a row.
 
-Labels/actions mirror ``backend/app/simulator.py`` so the 3-D hologram reacts
-identically to simulated and real telemetry.
+Continuous labels, colors, and actions mirror ``backend/app/simulator.py`` so
+the 3-D hologram reacts consistently to simulated and real telemetry. A fired
+focus or clench uses the explicit ``select`` action for its one-frame event.
 """
 
 from __future__ import annotations
@@ -38,14 +39,14 @@ def classify(metrics: Metrics) -> tuple[str, float, str]:
     """Map a metric snapshot onto (label, confidence, action)."""
 
     if metrics.focus > 0.86 and metrics.attention > 0.86:
-        return "precision_execution", 0.93, "stabilise"
+        return "precision_execution", 0.93, "stabilize high-fidelity control surface"
     if metrics.meditation > 0.82 and metrics.focus < 0.55:
-        return "calm_space", 0.88, "breathe"
+        return "calm_space", 0.88, "dim environment and reduce motion"
     if metrics.meditation > 0.6 and metrics.attention > 0.6:
-        return "creative_synthesis", 0.79, "compose"
+        return "creative_synthesis", 0.79, "expand ideation workspace"
     if metrics.attention > 0.78:
-        return "spatial_navigation", 0.84, "navigate"
-    return "ambient_monitoring", 0.62, "observe"
+        return "spatial_navigation", 0.84, "highlight next target path"
+    return "ambient_monitoring", 0.62, "maintain passive telemetry loop"
 
 
 @dataclass(frozen=True)

@@ -111,20 +111,20 @@ def test_classify_vocabulary_matches_simulator() -> None:
     label, confidence, action = classify(
         metrics(focus=0.95, meditation=0.1, attention=0.95)
     )
-    assert (label, action) == ("precision_execution", "stabilise")
+    assert (label, action) == ("precision_execution", "stabilize high-fidelity control surface")
     assert 0.0 <= confidence <= 1.0
 
     label, _, action = classify(metrics(focus=0.3, meditation=0.9, attention=0.4))
-    assert (label, action) == ("calm_space", "breathe")
+    assert (label, action) == ("calm_space", "dim environment and reduce motion")
 
     label, _, action = classify(metrics(focus=0.65, meditation=0.7, attention=0.7))
-    assert (label, action) == ("creative_synthesis", "compose")
+    assert (label, action) == ("creative_synthesis", "expand ideation workspace")
 
     label, _, action = classify(metrics(focus=0.5, meditation=0.4, attention=0.85))
-    assert (label, action) == ("spatial_navigation", "navigate")
+    assert (label, action) == ("spatial_navigation", "highlight next target path")
 
     label, _, action = classify(metrics(focus=0.3, meditation=0.3, attention=0.3))
-    assert (label, action) == ("ambient_monitoring", "observe")
+    assert (label, action) == ("ambient_monitoring", "maintain passive telemetry loop")
 
 
 def test_engine_rejects_invalid_thresholds() -> None:

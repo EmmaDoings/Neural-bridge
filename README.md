@@ -33,11 +33,11 @@ block `ws://localhost` as mixed content).
 ## Stack
 
 - **Frontend:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 3,
-  Zustand 5, Three.js, Web Speech API (planned)
+  Zustand 5, Three.js, Web Speech API (speech capture + synthesis)
 - **Backend:** FastAPI, async WebSockets, Pydantic 2, in-memory device bus
 - **Hardware:** Python 3, BrainFlow 5.23.0 (`SYNTHETIC_BOARD` or OpenBCI Cyton),
   `websockets` 17
-- **AI:** Gemini (server-side key, planned/being wired)
+- **AI:** Gemini (`/intent/respond`, server-side key, deterministic fallback)
 - **Deploy:** Render Blueprint + Vercel
 
 ## Project layout
@@ -47,7 +47,7 @@ frontend/                 Next.js dashboard, 3D hologram, option page
 backend/                  FastAPI telemetry, intent, device bus
 hardware/                 BrainFlow bridge + tests + setup guide
   nb_bridge/              config, board session, signal, metrics, intent, client
-  tests/                  32 unit tests
+  tests/                  bridge unit tests
 scripts/                  dev helpers + scripts/verify_pipeline.py (E2E)
 ROADMAP.md                Phases, risks, and what is verified vs pending
 DEPLOY.md                 $0 deployment runbook
@@ -93,6 +93,8 @@ cd hardware
 python -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 $env:NB_API_BASE="http://localhost:8000"
+# Only when the backend sets DEVICE_REGISTRATION_KEY, use the same value:
+# $env:NB_DEVICE_REGISTRATION_KEY="<same value>"
 .\.venv\Scripts\python -m nb_bridge
 ```
 
@@ -155,7 +157,9 @@ frame tolerance, command delivery, no self-echo, and ≥20 valid frames in 10 s.
   relative band powers, artifact gate, EMG clench detection, intent hysteresis
 - Device bus: registration, API-key auth, command delivery, own-frame filtering
 - Reactive 3D hologram (drag to rotate, scroll to zoom, tap to switch modes)
-- Deterministic intent parser (the Gemini orchestration client is the next phase)
+- Gemini-backed `/intent/respond` endpoint with a timeout, rate limit, and
+  deterministic fallback when no key is configured
+- Browser voice capture and speech synthesis, plus a typed-input fallback
 
 ## Deploy for $0
 
@@ -164,6 +168,19 @@ Backend on Render, frontend on Vercel:
 - Step-by-step guide: [`DEPLOY.md`](./DEPLOY.md)
 - Render Blueprint: [`render.yaml`](./render.yaml)
 - Phase plan and status: [`ROADMAP.md`](./ROADMAP.md)
+
+### Gemini and voice setup
+
+Set `GEMINI_API_KEY` on the backend only. The dashboard sends telemetry and an
+optional voice transcript to `POST /intent/respond`; the key is never sent to
+the browser. `GEMINI_MODEL`, `GEMINI_TIMEOUT_SECONDS`,
+`GEMINI_MAX_OUTPUT_TOKENS`, and `INTENT_RATE_LIMIT_SECONDS` tune the service.
+When the key is absent or Gemini is unavailable, the endpoint returns a
+deterministic response from the current telemetry so the interface remains
+usable.
+
+Voice input uses the browser's Web Speech API where available and always shows
+a text field as a fallback. Speech synthesis reads successful replies aloud.
 
 ## Safety
 

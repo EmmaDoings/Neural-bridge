@@ -13,28 +13,13 @@ const DEMO_INTERVAL_MS = 180;
 /**
  * Ask the backend to apply a preset.
  *
- * Mock deployments accept PUT /simulation/preset. Live deployments return 404
- * there, so we fall back to commanding the first connected EEG device, which
- * is what the hardware bridge listens for.
+ * The mock simulator is the only browser-controlled source. Hardware commands
+ * require that device's API key and must be issued by a trusted operator.
  */
 async function pushPreset(apiUrl: string, preset: PresetName): Promise<void> {
   try {
     const response = await fetch(`${apiUrl}/simulation/preset/${preset}`, { method: "PUT" });
     if (response.ok) return;
-  } catch {
-    // Backend asleep or unreachable; try the device path below.
-  }
-  try {
-    const response = await fetch(`${apiUrl}/devices`);
-    if (!response.ok) return;
-    const devices = (await response.json()) as Array<{ id: string; kind: string; connected: boolean }>;
-    const target = devices.find((device) => device.connected && device.kind === "eeg");
-    if (!target) return;
-    await fetch(`${apiUrl}/devices/${target.id}/command`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "set_preset", payload: { preset } })
-    });
   } catch {
     // Best effort: a preset button must never throw.
   }
@@ -141,7 +126,7 @@ export function TelemetrySocket() {
 
   // Keep the backend/device in sync with the preset buttons.
   useEffect(() => {
-    if (source === "demo") return;
+    if (source !== "online") return;
     const { apiUrl } = resolveSource(source);
     if (!apiUrl) return;
     void pushPreset(apiUrl, preset);
