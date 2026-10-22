@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 
 from app.config import settings
 from app.device_bus import bus
@@ -169,7 +170,12 @@ async def device_socket(websocket: WebSocket, device_id: str) -> None:
         except (json.JSONDecodeError, TypeError):
             return
         if data.get("type") == "telemetry":
-            frame = TelemetryFrame(**data.get("payload", {}))
+            try:
+                frame = TelemetryFrame(**data.get("payload", {}))
+            except (ValidationError, TypeError, ValueError):
+                # A malformed frame from one device must not tear down its
+                # command/telemetry socket.
+                return
             frame.source = device_id
             await bus.publish(device_id, frame.model_dump())
 
@@ -196,6 +202,11 @@ async def device_socket(websocket: WebSocket, device_id: str) -> None:
                         command_task = asyncio.create_task(commands.get())
                     else:
                         payload = task.result()
+                        # Do not echo a device's own frames back to it: the
+                        # device socket is for commands, not a mirror.
+                        if payload.get("source") == device_id:
+                            event_task = asyncio.create_task(channel.get())
+                            continue
                         await websocket.send_json({"type": "telemetry", **payload})
                         event_task = asyncio.create_task(channel.get())
         finally:

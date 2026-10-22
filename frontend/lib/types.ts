@@ -19,4 +19,8 @@ export type TelemetryFrame = {
     action: string;
     color: string;
   };
+  /** Device id that produced the frame (absent in client-side demo frames). */
+  source?: string | null;
+  /** One-frame pulse emitted when a discrete intent fires. */
+  triggered?: boolean;
 };

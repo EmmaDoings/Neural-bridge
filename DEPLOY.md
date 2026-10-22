@@ -47,6 +47,10 @@ of the manual setup.
 | `PYTHON_VERSION` | `3.13.5`                                           |
 | `NEURAL_BRIDGE_MODE` | `mock`                                         |
 
+> `NEURAL_BRIDGE_MODE=mock` generates frames inside the backend. For an
+> **Online**-mode setup fed by a real bridge, set it to `live`; otherwise the mock
+> generator and the hardware bridge both publish and the frames interleave.
+
 > The start command must use `$PORT`. Render injects it, and a hardcoded `8000`
 > fails the health check. `backend/Dockerfile` now honors `$PORT` too, so a
 > Docker-based deploy works as well.
@@ -75,9 +79,15 @@ of the manual setup.
    | ---------------------- | --------------------------------------------------------- |
    | `NEXT_PUBLIC_API_URL`  | `https://<service>.onrender.com`                          |
    | `NEXT_PUBLIC_WS_URL`   | `wss://<service>.onrender.com/ws/telemetry`               |
+   | `NEXT_PUBLIC_LOCAL_API_URL` (optional) | `http://localhost:8000`                    |
+   | `NEXT_PUBLIC_LOCAL_WS_URL` (optional)  | `ws://localhost:8000/ws/telemetry`         |
 
    - **`wss://` is required.** The page is served over `https://`, and browsers
      block insecure `ws://` connections (mixed content).
+   - The `NEXT_PUBLIC_LOCAL_*` variables only affect the **Hardware** option.
+     They default to `localhost:8000`, so production can omit them. Hardware
+     mode cannot work from the HTTPS Vercel page anyway; use it with
+     `http://localhost:3000`.
    - `NEXT_PUBLIC_*` values are inlined at **build time**, so changing them
      requires a **Redeploy** (Deployments → ⋯ → Redeploy).
 4. Deploy and note the URL, e.g. `https://neural-bridge.vercel.app`.
@@ -102,11 +112,60 @@ repo now supports) is required.
 
 ## 4. Verify end to end
 
-1. Open the Vercel URL — status should read **Live Stream** and the hologram
-   should animate.
-2. Switch presets; the color/scale of the hologram should change.
-3. Let the backend sleep, reload the page, and confirm the status shows
+1. Open the Vercel URL. **Demo** is the default source: the hologram animates
+   with no backend calls.
+2. Open **Settings → Online → Test connection**. It should report
+   `Reachable — status: ok, backend mode: mock`. Save; the status should read
+   **Live Stream**.
+3. Switch presets; the color/scale of the hologram should change.
+4. Let the backend sleep, reload the page, and confirm the status shows
    **Waking server…** until the stream returns.
+5. Open **Settings → Hardware** to see the local endpoints and the HTTPS
+   mixed-content warning (only shown when the page is served over HTTPS).
+
+---
+
+## 5. Hardware bridge (optional, local machine)
+
+The bridge is **not** deployed to Render. It runs next to the Cyton and connects
+to either the deployed backend or a local one. See
+[`hardware/README.md`](./hardware/README.md) for the full guide.
+
+```powershell
+cd hardware
+python -m venv .venv
+.\.venv\Scripts\pip install -r requirements.txt
+
+# Synthetic board -> deployed backend (safe default)
+.\.venv\Scripts\python -m nb_bridge --check
+.\.venv\Scripts\python -m nb_bridge
+
+# Real Cyton -> deployed backend
+$env:NB_BOARD="cyton"
+$env:NB_SERIAL_PORT="COM3"
+.\.venv\Scripts\python -m nb_bridge
+```
+
+To use the deployed backend as a live (non-mock) source:
+
+1. Render → Environment → set `NEURAL_BRIDGE_MODE=live`.
+2. Restart/redeploy the backend.
+3. Run the bridge with `NB_API_BASE=https://<service>.onrender.com` (the default).
+4. On the Vercel site choose **Online**. Frames now originate from the bridge.
+
+The device registry is in-memory, so a Render restart invalidates the bridge's
+key. The bridge re-registers automatically on HTTP 403 or close code `4401`.
+
+### Verify the bridge contract
+
+```powershell
+cd hardware
+.\.venv\Scripts\python ..\scripts\verify_pipeline.py
+```
+
+This starts a throw-away backend in live mode and checks registration,
+`triggered` propagation, malformed-frame tolerance, command delivery, no
+self-echo, and a valid synthetic stream.
 
 ---
 

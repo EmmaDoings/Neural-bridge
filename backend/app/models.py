@@ -40,6 +40,9 @@ class TelemetryFrame(BaseModel):
     waves: WaveBands
     intent: Intent
     source: str | None = None
+    # A one-frame pulse emitted when a discrete intent fires (sustained focus
+    # or an EMG clench). The dashboard/hologram can react without re-firing.
+    triggered: bool = False
 
 
 DeviceKind = Literal["eeg", "hologram", "haptics", "audio", "vision", "mock"]
