@@ -2,3 +2,4 @@
 # This is NOT installed by Render; the deployed backend has no hardware deps.
 brainflow==5.23.0
 websockets==17.2
+pyserial==3.5

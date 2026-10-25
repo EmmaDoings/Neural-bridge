@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.device_bus import bus
 from app.llm import intent_service
-from app.main import app
+from app.main import _haptic_requests, app
 
 
 @pytest.fixture(autouse=True)
@@ -14,10 +16,12 @@ def clean_state(monkeypatch: pytest.MonkeyPatch) -> None:
     bus._devices.clear()  # type: ignore[attr-defined]
     bus._channels.clear()  # type: ignore[attr-defined]
     bus._commands.clear()  # type: ignore[attr-defined]
+    _haptic_requests.clear()
     intent_service.reset()
     monkeypatch.setattr(settings, "device_registration_key", None)
     monkeypatch.setattr(settings, "gemini_api_key", None)
     monkeypatch.setattr(settings, "intent_rate_limit_seconds", 0.0)
+    monkeypatch.setattr(settings, "haptic_rate_limit_seconds", 0.0)
 
 
 def frame(*, triggered: bool = True) -> dict:
@@ -108,3 +112,79 @@ def test_intent_rate_limit_is_per_client(monkeypatch: pytest.MonkeyPatch) -> Non
     assert first.status_code == 200
     assert other.status_code == 200
     assert repeat.status_code == 429
+
+
+def test_haptics_pulse_requires_a_registered_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "mode", "live")
+    with TestClient(app) as client:
+        response = client.post(
+            "/haptics/pulse", json={"intensity": 0.5, "duration_ms": 100}
+        )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "no haptics device registered"
+
+
+def test_haptics_pulse_validates_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "mode", "live")
+    with TestClient(app) as client:
+        response = client.post(
+            "/haptics/pulse", json={"intensity": 1.5, "duration_ms": 100}
+        )
+        too_short = client.post(
+            "/haptics/pulse", json={"intensity": 0.5, "duration_ms": 5}
+        )
+    assert response.status_code == 422
+    assert too_short.status_code == 422
+
+
+def test_haptics_pulse_reaches_a_connected_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "mode", "live")
+    monkeypatch.setattr(settings, "haptic_rate_limit_seconds", 60.0)
+    with TestClient(app) as client:
+        registered = client.post(
+            "/devices", json={"name": "haptic-hologram", "kind": "haptics"}
+        )
+        assert registered.status_code == 200
+        device = registered.json()
+
+        with client.websocket_connect(
+            f"/ws/devices/{device['id']}?api_key={device['api_key']}"
+        ) as socket:
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                devices = client.get("/devices").json()
+                if any(
+                    item["id"] == device["id"] and item["connected"]
+                    for item in devices
+                ):
+                    break
+                time.sleep(0.01)
+            else:  # pragma: no cover - defensive
+                raise AssertionError("haptics device never became connected")
+
+            response = client.post(
+                "/haptics/pulse",
+                json={"intensity": 0.6, "duration_ms": 250},
+            )
+            assert response.status_code == 200
+            assert response.json()["device"] == device["id"]
+
+            message = socket.receive_json()
+            assert message["type"] == "command"
+            assert message["action"] == "pulse"
+            assert message["payload"] == {
+                "intensity": 0.6,
+                "duration_ms": 250,
+            }
+
+            # A second pulse within the cooldown is rejected before queueing.
+            limited = client.post(
+                "/haptics/pulse",
+                json={"intensity": 0.2, "duration_ms": 100},
+            )
+            assert limited.status_code == 429
+            assert limited.headers["retry-after"] == "60"

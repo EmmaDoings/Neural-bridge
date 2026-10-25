@@ -10,7 +10,9 @@ The script starts a throw-away backend in live mode on a free port, then:
    asserts ``triggered`` survives the round trip, asserts a malformed frame is
    ignored without closing the socket, asserts commands are delivered, and
    asserts the device never receives its own telemetry echo.
-2. **Pipeline** - runs the synthetic BrainFlow bridge and asserts real frames
+2. **Haptics** - registers a haptics device, queues a pulse through the
+   browser-safe endpoint, and asserts the command arrives with exact bounds.
+3. **Pipeline** - runs the synthetic BrainFlow bridge and asserts real frames
    arrive on ``/ws/telemetry`` with valid ranges.
 
 Exit code 0 means every assertion passed.
@@ -178,6 +180,59 @@ async def contract_check(base: str, port: int) -> None:
             pass
 
 
+async def haptics_check(base: str, port: int) -> None:
+    """A haptics device receives the pulse queued by the browser-safe endpoint."""
+    registration = post_json(
+        f"{base}/devices",
+        {"name": "verify-haptics", "kind": "haptics"},
+        {"X-Registration-Key": "verify-registration-key"},
+    )
+    device_id = registration["id"]
+    api_key = registration["api_key"]
+    device_url = (
+        f"ws://127.0.0.1:{port}/ws/devices/{device_id}?api_key={api_key}"
+    )
+
+    try:
+        async with websockets.connect(device_url, open_timeout=10) as device:
+            await asyncio.sleep(0.1)
+            for _ in range(50):
+                devices = get_json(f"{base}/devices")
+                if any(
+                    item["id"] == device_id and item["connected"]
+                    for item in devices
+                ):
+                    break
+                await asyncio.sleep(0.02)
+            else:  # pragma: no cover - defensive
+                raise AssertionError("haptics device never became connected")
+
+            response = post_json(
+                f"{base}/haptics/pulse",
+                {"intensity": 0.55, "duration_ms": 180},
+            )
+            assert response["device"] == device_id, response
+
+            command = json.loads(await asyncio.wait_for(device.recv(), 5))
+            assert command["type"] == "command", command
+            assert command["action"] == "pulse", command
+            assert command["payload"] == {
+                "intensity": 0.55,
+                "duration_ms": 180,
+            }, command
+    finally:
+        try:
+            request = urllib.request.Request(
+                f"{base}/devices/{device_id}",
+                headers={"X-Api-Key": api_key},
+                method="DELETE",
+            )
+            with urllib.request.urlopen(request, timeout=10):
+                pass
+        except Exception:
+            pass
+
+
 async def collect_frames(url: str, seconds: float) -> list[dict]:
     frames: list[dict] = []
     async with websockets.connect(url, open_timeout=10) as socket:
@@ -251,6 +306,7 @@ def main() -> int:
     backend_env["CORS_ORIGINS"] = "http://localhost:3000"
     backend_env["GEMINI_API_KEY"] = ""
     backend_env["DEVICE_REGISTRATION_KEY"] = "verify-registration-key"
+    backend_env["HAPTIC_RATE_LIMIT_SECONDS"] = "0"
 
     backend = subprocess.Popen(
         [
@@ -279,6 +335,9 @@ def main() -> int:
 
         asyncio.run(contract_check(base, port))
         print("contract: OK (triggered, malformed frames, commands, no self-echo)")
+
+        asyncio.run(haptics_check(base, port))
+        print("haptics: OK (pulse queued and delivered)")
 
         frames = run_bridge_check(base, port, Path(sys.executable))
         print(f"pipeline: OK ({len(frames)} frames, source {frames[0]['source']})")

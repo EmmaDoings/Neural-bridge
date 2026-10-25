@@ -1,6 +1,8 @@
 import asyncio
 import json
+import math
 import secrets
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import (
@@ -20,6 +22,7 @@ from app.llm import intent_service
 from app.models import (
     DeviceCommand,
     DeviceRegistration,
+    HapticPulse,
     IntentRespondRequest,
     IntentRespondResult,
     PresetName,
@@ -64,6 +67,19 @@ app.add_middleware(
 )
 
 
+# Last successful haptic request per client IP. Process-local by design, like
+# the intent limiter: a free Render instance has one worker.
+_haptic_requests: dict[str, float] = {}
+
+
+def client_key(http_request: Request) -> str:
+    forwarded = http_request.headers.get("x-forwarded-for", "")
+    key = forwarded.split(",")[0].strip()
+    if not key:
+        key = http_request.client.host if http_request.client else "unknown"
+    return key
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "mode": settings.mode}
@@ -83,11 +99,9 @@ async def telemetry(preset: PresetName = "conversation"):
 async def respond_to_intent(
     request: IntentRespondRequest, http_request: Request
 ) -> IntentRespondResult:
-    forwarded = http_request.headers.get("x-forwarded-for", "")
-    client_key = forwarded.split(",")[0].strip()
-    if not client_key:
-        client_key = http_request.client.host if http_request.client else "unknown"
-    return await intent_service.respond(request, client_key=client_key)
+    return await intent_service.respond(
+        request, client_key=client_key(http_request)
+    )
 
 
 @app.put("/simulation/preset/{preset}")
@@ -99,6 +113,64 @@ async def set_simulation_preset(preset: PresetName) -> dict[str, str]:
     if device:
         device["preset"] = preset
     return {"status": "ok", "preset": preset}
+
+
+@app.post("/haptics/pulse")
+async def pulse_haptics(
+    pulse: HapticPulse, http_request: Request
+) -> dict[str, str]:
+    """Queue one bounded pulse for a connected haptics actuator.
+
+    The browser never holds a device API key. This endpoint is the
+    operator-facing path: it selects a registered haptics device and asks the
+    backend's own command bus to deliver the pulse. CORS and a short per-client
+    cooldown limit accidental or abusive activation; it is still an
+    unauthenticated demo endpoint.
+    """
+
+    key = client_key(http_request)
+    now = time.monotonic()
+    limit = settings.haptic_rate_limit_seconds
+    if limit > 0:
+        last = _haptic_requests.get(key)
+        if last is not None and now - last < limit:
+            retry_after = max(1, math.ceil(limit - (now - last)))
+            raise HTTPException(
+                status_code=429,
+                detail="haptic pulse rate limit exceeded",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+    devices = [d for d in bus.list_devices() if d["kind"] == "haptics"]
+    if pulse.device_id is not None:
+        devices = [d for d in devices if d["id"] == pulse.device_id]
+        if not devices:
+            raise HTTPException(status_code=404, detail="haptics device not found")
+    if not devices:
+        raise HTTPException(status_code=404, detail="no haptics device registered")
+
+    command = {
+        "action": "pulse",
+        "payload": {
+            "intensity": pulse.intensity,
+            "duration_ms": pulse.duration_ms,
+        },
+    }
+    for device in devices:
+        status = await bus.send_command(device["id"], command)
+        if status == "queued":
+            if limit > 0:
+                _haptic_requests[key] = now
+            return {
+                "status": "queued",
+                "device": device["id"],
+                "name": device["name"],
+            }
+        if status == "full":
+            raise HTTPException(
+                status_code=429, detail="haptics command queue is full"
+            )
+    raise HTTPException(status_code=409, detail="haptics device is not connected")
 
 
 @app.get("/devices")

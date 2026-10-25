@@ -44,3 +44,6 @@ services:
         value: "8"
       - key: INTENT_RATE_LIMIT_SECONDS
         value: "3"
+      # Short per-client cooldown before a physical haptic pulse is queued.
+      - key: HAPTIC_RATE_LIMIT_SECONDS
+        value: "0.5"

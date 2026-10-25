@@ -58,6 +58,15 @@ class DeviceCommand(BaseModel):
     payload: dict = Field(default_factory=dict)
 
 
+class HapticPulse(BaseModel):
+    """One bounded pulse for a connected haptics actuator."""
+
+    intensity: float = Field(default=0.7, ge=0.0, le=1.0)
+    duration_ms: int = Field(default=200, ge=10, le=2000)
+    # Optional target when more than one haptics device is registered.
+    device_id: str | None = Field(default=None, max_length=64)
+
+
 class IntentRespondRequest(BaseModel):
     """Context sent by the dashboard for one cognitive or voice interaction."""
 

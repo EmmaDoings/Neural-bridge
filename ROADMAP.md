@@ -4,14 +4,16 @@ Goal: replace the mock EEG loop with **real biological data from an OpenBCI Cyto
 existing intent engine and 3D hologram, and add a Gemini-backed response loop — while keeping the
 deployed stack at **$0**.
 
-Status: **v0.5.1** — the local bridge, three source modes, Gemini response loop,
-and backend contract are implemented and verified against BrainFlow's synthetic board
-(32 bridge unit tests + 7 backend tests + `scripts/verify_pipeline.py`). Device
-enrollment can now be protected with a registration secret; device commands and
-deletion require the device API key. Real Cyton validation remains pending physical
-hardware; the repository now includes a local validation runner. The deployed backend
-still runs the mock generator (`mode: mock`), and the deployed frontend predates
-`/settings`, the source selector, and `/intent/respond`; redeploy to pick them up.
+Status: **v0.6.0** — the local EEG bridge, three source modes, Gemini response
+loop, and the haptics output pipeline are implemented. Verified against
+BrainFlow's synthetic board and a mock actuator (50 bridge/haptics unit tests +
+14 backend tests + `scripts/verify_pipeline.py`). Device enrollment can be
+protected with a registration secret; device commands and deletion require the
+device API key. Real Cyton validation and physical motor/LRA validation remain
+pending hardware. The deployed backend still runs the mock generator
+(`mode: mock`); the deployed frontend includes `/settings`, the source selector,
+the voice panel, and `/intent/respond`. Redeploy after this haptics change to
+expose `/haptics/pulse` and the dashboard panel.
 
 ---
 
@@ -27,6 +29,10 @@ hardware/nb_bridge/  (local Python + BrainFlow)
         │  WS /ws/devices/{id}?api_key=…     ← existing endpoint
         ▼
 Render backend  ──publish("*")──▶  WS /ws/telemetry  ──▶  Vercel frontend
+        │                                                    │
+        │                                                    │ POST /haptics/pulse
+        │                                                    ▼
+        └── command queue ──▶ hardware/nb_haptics ──▶ mock / serial actuator
         │
         └── triggered frame ──▶ Gemini (server-side key) ──▶ orchestration message
 ```
@@ -149,8 +155,8 @@ on whether server-side STT/TTS is needed.
 
 ### Phase 6 — Hardening — 🚧 partial
 
-- ✅ 32 bridge unit tests (pytest) and `scripts/verify_pipeline.py` for the
-  backend contract + synthetic pipeline.
+- ✅ 50 bridge/haptics unit tests (pytest) and `scripts/verify_pipeline.py` for
+  the backend contract, haptics pulse delivery, and synthetic pipeline.
 - ✅ Frontend `typecheck`, `lint`, and production `build` pass.
 - ✅ Backend pytest + `httpx` coverage for enrollment auth, API-key mutation
   protection, response fallback, validation, per-IP rate limiting, truncation
@@ -164,6 +170,24 @@ on whether server-side STT/TTS is needed.
 - ⬜ Keep-alive monitor on `/health`; structured logs; Sentry free tier optional.
 - Persistence: in-memory is fine for demos; Neon/Supabase free Postgres if
   history is needed.
+
+### Phase 7 — Haptics output — ✅ software path (physical pending)
+
+- ✅ `hardware/nb_haptics/`: config, mock and serial drivers, pulse controller,
+  CLI, and registration/reconnect through the shared `nb_common` client.
+- ✅ `POST /haptics/pulse` with bounded intensity/duration, optional device
+  targeting, per-client cooldown, and queue-saturation handling.
+- ✅ Dashboard **Haptic output** panel: polls `GET /devices`, shows connection
+  state, sends pulses, and never holds a device key.
+- ✅ Serial line protocol (`PULSE <intensity> <ms>`) and reference
+  Arduino/ESP32 firmware with MOSFET/driver wiring warnings.
+- ✅ Unit tests (config, bounds, mock driver, controller, fake serial port) and
+  E2E pulse delivery.
+- ⬜ Physical ERM/LRA validation, PWM/frequency tuning, and enclosure/safety
+  review. The `haptics`/`hologram` device kinds are still transport enums, not a
+  claim that a physical hologram or touch surface exists.
+- ⬜ Authenticated operator control for physical actuators; the endpoint is
+  currently an unauthenticated demo path with CORS + per-IP cooldown.
 
 ---
 
@@ -180,6 +204,8 @@ on whether server-side STT/TTS is needed.
 - ✅ Demo simulator: faithful TS port of `backend/app/simulator.py`.
 - ⬜ `Hologram.tsx`: react to discrete `action` events (mode switch, select).
 - ✅ Voice panel with browser speech recognition, speech synthesis, and typed fallback.
+- ✅ Haptics panel: device status polling, intensity/duration controls, pulse
+  delivery feedback, and mode-aware copy.
 
 ## 5. Backend changes
 
@@ -192,7 +218,9 @@ on whether server-side STT/TTS is needed.
 - ✅ Device removal and commands require the device API key; bridge enrollment
   optionally requires `DEVICE_REGISTRATION_KEY`.
 - ✅ `app/llm.py` + `POST /intent/respond` (Gemini, timeout, fallback, per-IP rate limit, thinking disabled).
-- ⬜ Broader API/WebSocket tests (source filtering, command saturation) and LLM authentication.
+- ✅ `POST /haptics/pulse` (bounded pulse, optional target, per-IP cooldown,
+  queue-saturation handling); the browser never receives the device key.
+- ⬜ Broader API/WebSocket tests (source filtering, command saturation) and LLM/haptics authentication.
 - ℹ️ Metrics/intent live in the local bridge (fast tuning, no backend hardware
   dependency); the backend stays a transport/broadcast layer.
 
@@ -210,6 +238,8 @@ on whether server-side STT/TTS is needed.
 | Web Speech API support | Chrome/Edge only; keep a typed fallback |
 | LLM cost/latency | per-IP rate limit, timeout, thinking disabled, fallback |
 | Public `/intent/respond` abuse | per-IP rate limit + CORS; add a daily quota/auth before sharing widely |
+| Public `/haptics/pulse` activates a physical actuator | per-IP cooldown + CORS; keep powerful actuators local, add operator auth before public use |
+| Motor wiring / overdrive | bounded payloads in backend + bridge; MOSFET/driver, flyback diode, separate supply in the firmware guide |
 
 ## 7. Cost
 
@@ -225,3 +255,6 @@ hardware cost.
 3. **In-memory telemetry is enough** for the current demo; history is a later
    option (Neon/Supabase free Postgres).
 4. **Gemini Flash, model name via env** (`GEMINI_MODEL`), server-side only.
+5. **Haptics are queued by the backend**, not posted directly by the browser to a
+   device socket. This keeps the device API key server-side and gives one place
+   for bounds, cooldowns, and future operator auth.

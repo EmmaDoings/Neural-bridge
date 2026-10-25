@@ -36,13 +36,16 @@ of the manual setup.
    uvicorn app.main:app --host 0.0.0.0 --port $PORT
    ```
    `render.yaml` also sets `GEMINI_MODEL=gemini-2.5-flash`,
-   `GEMINI_THINKING_BUDGET=0`, `GEMINI_MAX_OUTPUT_TOKENS=160`, and
-   `GEMINI_TIMEOUT_SECONDS=8`.
+   `GEMINI_THINKING_BUDGET=0`, `GEMINI_MAX_OUTPUT_TOKENS=160`,
+   `GEMINI_TIMEOUT_SECONDS=8`, and the haptics cooldown
+   `HAPTIC_RATE_LIMIT_SECONDS=0.5`.
 4. Verify:
    - `https://<service>.onrender.com/health` → `{"status":"ok","mode":"mock"}`
    - `wss://<service>.onrender.com/ws/telemetry` streams telemetry frames.
    - `POST https://<service>.onrender.com/intent/respond` returns
      `provider: "gemini"` when the key is set, or `"fallback"` otherwise.
+   - `POST https://<service>.onrender.com/haptics/pulse` returns `404` until a
+     haptics bridge is connected, then queues a bounded pulse.
 
 **Prefer clicking through manually?** New → **Web Service** with:
 
@@ -103,8 +106,8 @@ of the manual setup.
 4. Deploy and note the URL, e.g. `https://neural-bridge.vercel.app`.
 
 > The deployed site must be built from the current commit. An older deployment
-> will return 404 for `/settings` and will not show the source selector or the
-> voice panel; redeploy after pulling the latest changes.
+> will return 404 for `/settings` and will not show the source selector, voice
+> panel, or haptics panel; redeploy after pulling the latest changes.
 
 See [`frontend/.env.example`](./frontend/.env.example) for local defaults.
 
@@ -172,6 +175,29 @@ key. The bridge re-registers automatically on HTTP 403 or close code `4401`.
 When `DEVICE_REGISTRATION_KEY` is configured, also set the matching local
 `NB_DEVICE_REGISTRATION_KEY` before starting the bridge.
 
+### Haptics bridge (optional, local machine)
+
+The haptics bridge is also local. It registers as a `haptics` device and waits
+for pulses queued by the dashboard:
+
+```powershell
+cd hardware
+$env:NB_HAPTICS_API_BASE="https://<service>.onrender.com"
+$env:NB_HAPTICS_REGISTRATION_KEY="<same value as DEVICE_REGISTRATION_KEY>"
+.\.venv\Scripts\python -m nb_haptics --check --pulse
+.\.venv\Scripts\python -m nb_haptics
+```
+
+For a local stack use `NB_HAPTICS_API_BASE=http://localhost:8000` and select
+**Hardware** in the dashboard. For the deployed backend, select **Online**. The
+**Haptic output** panel should list the device. The serial actuator setup,
+firmware, and wiring warnings are in
+[`hardware/README.md`](./hardware/README.md#haptics-bridge-output).
+
+> `/haptics/pulse` is rate-limited per client IP but has no user login. Do not
+> connect a powerful motor to a public deployment. A real haptics device is not
+> part of the hosted stack.
+
 ### Verify the bridge contract
 
 ```powershell
@@ -181,7 +207,7 @@ cd hardware
 
 This starts a throw-away backend in live mode and checks registration,
 `triggered` propagation, malformed-frame tolerance, command delivery, no
-self-echo, and a valid synthetic stream.
+self-echo, haptics pulse delivery, and a valid synthetic stream.
 
 ---
 
@@ -196,6 +222,9 @@ self-echo, and a valid synthetic stream.
 - `/intent/respond` is rate-limited per client IP (default one request every
   3 seconds) but has no user login. Treat it as a public demo endpoint and set a
   budget alert in Google AI Studio.
+- `/haptics/pulse` is rate-limited per client IP (`HAPTIC_RATE_LIMIT_SECONDS`,
+  default `0.5`) but has no user login. Keep powerful actuators local until an
+  authenticated operator path exists.
 - Generate backend-only secrets on Render with:
   ```
   python -c "import secrets; print(secrets.token_hex(32))"

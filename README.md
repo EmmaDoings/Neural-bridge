@@ -36,7 +36,9 @@ block `ws://localhost` as mixed content).
   Zustand 5, Three.js, Web Speech API (speech capture + synthesis)
 - **Backend:** FastAPI, async WebSockets, Pydantic 2, in-memory device bus
 - **Hardware:** Python 3, BrainFlow 5.23.0 (`SYNTHETIC_BOARD` or OpenBCI Cyton),
-  `websockets` 17
+  `websockets` 17, `pyserial` 3.5
+- **Haptics:** local `nb_haptics` bridge (mock or serial actuator) plus an
+  Arduino/ESP32 reference firmware sketch
 - **AI:** Gemini (`/intent/respond`, server-side key, deterministic fallback)
 - **Deploy:** Render Blueprint + Vercel
 
@@ -45,9 +47,12 @@ block `ws://localhost` as mixed content).
 ```text
 frontend/                 Next.js dashboard, 3D hologram, option page
 backend/                  FastAPI telemetry, intent, device bus
-hardware/                 BrainFlow bridge + tests + setup guide
-  nb_bridge/              config, board session, signal, metrics, intent, client
-  tests/                  bridge unit tests
+hardware/                 BrainFlow + haptics bridges, firmware, tests
+  nb_bridge/              EEG config, board session, signal, metrics, intent
+  nb_haptics/             haptics config, drivers, controller, CLI
+  nb_common/              shared device registration/WebSocket client
+  haptics_firmware/       Arduino/ESP32 pulse firmware
+  tests/                  bridge + haptics unit tests
 scripts/                  dev helpers + scripts/verify_pipeline.py (E2E)
 ROADMAP.md                Phases, risks, and what is verified vs pending
 DEPLOY.md                 $0 deployment runbook
@@ -101,8 +106,21 @@ $env:NB_API_BASE="http://localhost:8000"
 In the dashboard, open **Settings → Hardware → Save**. The bridge registers as a
 device and its frames appear on `/ws/telemetry`.
 
+Terminal 4 — haptics bridge (mock actuator):
+
+```powershell
+cd hardware
+$env:NB_HAPTICS_API_BASE="http://localhost:8000"
+.\.venv\Scripts\python -m nb_haptics
+```
+
+The **Haptic output** panel on the dashboard should show `haptic-hologram
+connected`; **Send pulse** queues a bounded pulse to the bridge. For a real
+motor, see the serial setup and wiring warnings in
+[`hardware/README.md`](./hardware/README.md).
+
 See [`hardware/README.md`](./hardware/README.md) for the Cyton setup, channel
-mapping, calibration, and troubleshooting.
+mapping, calibration, haptics firmware, and troubleshooting.
 
 ## OpenBCI Cyton
 
@@ -125,10 +143,39 @@ Before trusting the output, verify streaming and impedances in the OpenBCI GUI
 (< 10 kΩ), fix the reference, and re-seat the electrodes. The bridge rejects flat
 and railed windows so a disconnected electrode cannot produce a confident intent.
 
+## Haptics output
+
+The dashboard's **Haptic output** panel calls `POST /haptics/pulse` with an
+intensity (`0..1`) and duration (`10..2000 ms`). The backend selects a connected
+device whose kind is `haptics` and queues a `pulse` command. The local bridge
+validates the payload and drives either the mock actuator or a serial
+Arduino/ESP32 controller. The browser never receives a device API key.
+
+```powershell
+cd hardware
+.\.venv\Scripts\python -m nb_haptics --check --pulse   # mock, one test pulse
+.\.venv\Scripts\python -m nb_haptics                   # wait for dashboard pulses
+```
+
+For a real ERM motor:
+
+```powershell
+$env:NB_HAPTICS_DRIVER="serial"
+$env:NB_HAPTICS_SERIAL_PORT="COM4"
+.\.venv\Scripts\python -m nb_haptics
+```
+
+Upload [`haptics_firmware/haptics_firmware.ino`](./hardware/haptics_firmware/haptics_firmware.ino)
+and close the Arduino Serial Monitor. **Never connect a motor directly to a GPIO
+pin**; use a MOSFET/driver, flyback diode, and a separate motor supply. The mock
+path and serial protocol are tested; a physical motor and LRA output are still
+pending hardware validation. The pulse endpoint has a per-IP cooldown but no
+user login, so keep powerful actuators off the public deployment.
+
 ## Tests and verification
 
 ```powershell
-# Bridge unit tests (32)
+# Bridge + haptics unit tests (50)
 cd hardware
 .\.venv\Scripts\python -m pytest tests -q
 
@@ -144,7 +191,8 @@ cd ..\hardware
 ```
 
 The E2E script verifies device registration, `triggered` propagation, malformed
-frame tolerance, command delivery, no self-echo, and ≥20 valid frames in 10 s.
+frame tolerance, command delivery, no self-echo, haptics pulse delivery, and ≥20
+valid frames in 10 s.
 
 ## Current prototype scope
 
@@ -160,6 +208,8 @@ frame tolerance, command delivery, no self-echo, and ≥20 valid frames in 10 s.
 - Gemini-backed `/intent/respond` endpoint with a timeout, rate limit, and
   deterministic fallback when no key is configured
 - Browser voice capture and speech synthesis, plus a typed-input fallback
+- Haptics output pipeline: browser-safe pulse endpoint, mock/serial bridge,
+  Arduino reference firmware, and a dashboard pulse/status panel
 
 ## Deploy for $0
 

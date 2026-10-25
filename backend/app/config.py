@@ -35,6 +35,11 @@ class Settings:
     intent_rate_limit_seconds: float = max(
         0.0, float(os.getenv("INTENT_RATE_LIMIT_SECONDS", "3"))
     )
+    # Physical actuators get a short per-client cooldown in addition to the
+    # device command queue limit. 0 disables it for local tests.
+    haptic_rate_limit_seconds: float = max(
+        0.0, float(os.getenv("HAPTIC_RATE_LIMIT_SECONDS", "0.5"))
+    )
     secret_key: str | None = os.getenv("SECRET_KEY") or None
     jwt_secret: str | None = os.getenv("JWT_SECRET") or None
 

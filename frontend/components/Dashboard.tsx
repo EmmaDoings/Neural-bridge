@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { HapticsPanel } from "./HapticsPanel";
 import { Hologram } from "./Hologram";
 import { TelemetrySocket } from "./TelemetrySocket";
 import { VoicePanel } from "./VoicePanel";
@@ -123,6 +124,7 @@ export function Dashboard() {
           </div>
         </div>
         <VoicePanel apiUrl={apiUrl} frame={frame} />
+        <HapticsPanel key={source} apiUrl={apiUrl} />
       </section>
     </main>
   );

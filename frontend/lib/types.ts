@@ -1,5 +1,13 @@
 export type PresetName = "surgery" | "gaming" | "meditation" | "conversation" | "creative" | "navigation" | "idle";
 
+export type DeviceInfo = {
+  id: string;
+  name: string;
+  kind: string;
+  connected: boolean;
+  last_seen: number;
+};
+
 export type TelemetryFrame = {
   timestamp: number;
   preset: PresetName;

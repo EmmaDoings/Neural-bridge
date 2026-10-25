@@ -1,8 +1,12 @@
-# Neural Bridge hardware bridge
+# Neural Bridge hardware bridges
 
-Local Python process that turns an **OpenBCI Cyton** (or BrainFlow's synthetic
-board) into telemetry frames for the Neural Bridge backend. It is a *client* of
-the backend, not a second server for the browser.
+This directory contains two local Python processes that are *clients* of the
+backend, never servers for the browser:
+
+- **`nb_bridge`** turns an **OpenBCI Cyton** (or BrainFlow's synthetic board)
+  into telemetry frames.
+- **`nb_haptics`** receives bounded pulse commands and drives a mock or serial
+  actuator (the output side of the hologram).
 
 ```
 OpenBCI Cyton ──USB dongle──▶ nb_bridge (BrainFlow + metrics + intent)
@@ -11,12 +15,13 @@ OpenBCI Cyton ──USB dongle──▶ nb_bridge (BrainFlow + metrics + intent)
                                       │  WS /ws/devices/{id}?api_key=…
                                       ▼
                               FastAPI backend
-                                      │  publish("*")
-                                      ▼
-                              WS /ws/telemetry
-                                      │
-                                      ▼
-                              Next.js dashboard
+                                │           ▲
+              publish("*")      │           │  POST /haptics/pulse
+                                ▼           │  (browser-safe, no device key)
+                         WS /ws/telemetry   │
+                                │      nb_haptics (mock / serial actuator)
+                                ▼           ▲
+                         Next.js dashboard ─┘
 ```
 
 The bridge registers itself, computes metrics and intent locally, and streams
@@ -29,10 +34,13 @@ reads.
 | Area | Status |
 | --- | --- |
 | BrainFlow 5.23.0 API (PSD, band powers, filters, EMG) | Verified empirically |
-| Synthetic board end to end | Verified (41 frames in 10 s, valid ranges) |
+| Synthetic board end to end | Verified (≥20 frames in 10 s, valid ranges) |
 | Backend contract (`triggered`, malformed frames, commands, no self-echo) | Verified |
-| Unit tests | 32 passing |
+| Haptics command path (mock actuator, registered device → backend → pulse) | Verified |
+| Serial line protocol (fake serial port) | Verified by unit tests |
+| Unit tests | 50 passing |
 | Real Cyton signal quality / impedances / EMG thresholds | **Pending hardware arrival** |
+| Real motor / LRA output, firmware on physical hardware | **Pending hardware arrival** |
 
 The code path for the Cyton is the same as the synthetic path; only the board id,
 serial port and channel names change. It has **not** been validated on real EEG
@@ -59,8 +67,11 @@ python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 ```
 
-`requirements.txt` pins `brainflow==5.23.0` and `websockets==17.2`. Hardware
-dependencies are **not** installed on Render; the deployed backend stays lightweight.
+`requirements.txt` pins `brainflow==5.23.0`, `websockets==17.2`, and
+`pyserial==3.5`. Hardware dependencies are **not** installed on Render; the
+deployed backend stays lightweight. The haptics bridge in mock mode does not
+need pyserial, but it is included so the serial actuator path works after the
+same install.
 
 ## Quick check
 
@@ -208,6 +219,139 @@ electrode does not produce a confident intent. A jaw clench is detected from
 threshold + hysteresis + sustain + cooldown, and set `triggered: true` for one
 frame.
 
+## Haptics bridge (output)
+
+`nb_haptics` is the output-side counterpart to the EEG bridge. It registers as a
+`haptics` device, waits for commands, and drives a mock or serial actuator:
+
+```
+dashboard Haptics panel
+        │  POST /haptics/pulse  { intensity, duration_ms }
+        ▼
+FastAPI backend  ── selects a connected kind="haptics" device ──▶ device queue
+        │
+        ▼  {"type":"command","action":"pulse","payload":…}
+hardware/nb_haptics  ── PULSE <intensity> <duration_ms> ──▶ actuator
+```
+
+The browser never receives a device API key. `POST /haptics/pulse` is the
+operator path; it is CORS-limited and rate-limited per client IP
+(`HAPTIC_RATE_LIMIT_SECONDS`, default `0.5`). It is still an unauthenticated
+demo endpoint, so do not attach a powerful actuator to a public deployment.
+
+### Mock quick start
+
+With a backend running on `http://localhost:8000`:
+
+```powershell
+cd hardware
+.\.venv\Scripts\python -m nb_haptics --check --pulse
+.\.venv\Scripts\python -m nb_haptics
+```
+
+- `--check` validates the config, calls `/health`, and opens the driver.
+- `--pulse` sends one test pulse (`0.60`, 250 ms); it can move a connected motor,
+  so omit it when you only want a dry check.
+- The default API base is `http://localhost:8000`. Override it with
+  `--api-base` or `NB_HAPTICS_API_BASE`.
+- The default actuator is `mock`: it logs pulses and records them in memory, so
+  the full registration/command path works without hardware.
+
+For the deployed backend:
+
+```powershell
+.\.venv\Scripts\python -m nb_haptics --api-base https://neural-bridge-api.onrender.com
+```
+
+If the backend sets `DEVICE_REGISTRATION_KEY`, export the same value as
+`NB_HAPTICS_REGISTRATION_KEY` (or the shared `NB_DEVICE_REGISTRATION_KEY`).
+
+On the dashboard:
+
+1. For a local backend, open **Settings → Hardware → Save**.
+2. For the deployed backend, choose **Online**.
+3. The **Haptic output** panel polls `GET /devices`, shows the actuator, and sends
+   the pulse. Demo mode has no backend, so the panel asks you to switch modes.
+
+### Serial actuator
+
+```powershell
+$env:NB_HAPTICS_DRIVER="serial"
+$env:NB_HAPTICS_SERIAL_PORT="COM4"   # check Device Manager
+.\.venv\Scripts\python -m nb_haptics --check --pulse
+.\.venv\Scripts\python -m nb_haptics
+```
+
+The reference sketch is
+[`haptics_firmware/haptics_firmware.ino`](./haptics_firmware/haptics_firmware.ino).
+Open it in the Arduino IDE, select the board and port, and upload it. Close the
+Arduino Serial Monitor before starting the bridge; two programs cannot own the
+same serial port.
+
+> **Wiring safety:** never drive a vibration motor directly from a GPIO pin. Use
+> a MOSFET or motor-driver module, a flyback diode across the motor, a separate
+> motor supply, and a common ground. Check the motor's rated voltage and current.
+> The sketch drives a DC ERM motor with PWM; an LRA needs a dedicated LRA driver.
+
+The line protocol is:
+
+| Command | Effect | Reply |
+| --- | --- | --- |
+| `PULSE 0.65 220` | Set PWM to 65% for 220 ms, then stop | `OK` |
+| `STOP` | Stop immediately | `OK` |
+| `PING` | Liveness check | `PONG` |
+
+The bridge sends `PULSE` and reads one acknowledgement with a short timeout.
+A missing acknowledgement is logged but does not mark an already-written pulse
+as failed.
+
+### Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `NB_HAPTICS_API_BASE` | `NB_API_BASE` or `http://localhost:8000` | Backend base URL |
+| `NB_HAPTICS_DRIVER` | `mock` | `mock` or `serial` |
+| `NB_HAPTICS_SERIAL_PORT` | — | Required for `serial` (e.g. `COM4`) |
+| `NB_HAPTICS_BAUD` | `115200` | Serial baud rate |
+| `NB_HAPTICS_DEVICE_NAME` | `haptic-hologram` | Name shown in `GET /devices` |
+| `NB_HAPTICS_REQUEST_TIMEOUT` | `60.0` | Registration/health timeout |
+| `NB_HAPTICS_REGISTRATION_KEY` | `NB_DEVICE_REGISTRATION_KEY` | Matches the backend secret |
+| `NB_HAPTICS_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+
+CLI overrides: `--api-base`, `--driver`, `--serial-port`, `--baud`,
+`--device-name`, `--duration`, `--check`, `--pulse`.
+
+### Backend endpoint
+
+`POST /haptics/pulse` accepts:
+
+```json
+{ "intensity": 0.65, "duration_ms": 220, "device_id": "optional-id" }
+```
+
+`intensity` is `0..1`, `duration_ms` is `10..2000`. If `device_id` is omitted,
+the first registered haptics device is used. Responses:
+
+- `200 {"status":"queued","device":"…","name":"…"}`
+- `404` no registered device (or the requested id is unknown)
+- `409` device is registered but not connected
+- `429` per-client cooldown or command queue saturation
+
+The device must be connected over `WS /ws/devices/{id}`; the backend queues the
+command and the bridge actuates it. The endpoint has no user authentication yet.
+
+### Haptics verification
+
+```powershell
+.\.venv\Scripts\python -m pytest tests -q
+.\.venv\Scripts\python ..\scripts\verify_pipeline.py
+```
+
+The unit suite covers config validation, pulse bounds, the mock driver, the
+controller, and the serial line protocol against a fake port. The E2E script
+also registers a haptics device, connects its socket, posts a pulse through the
+browser-safe endpoint, and asserts the command arrives intact.
+
 ## Tests
 
 ```powershell
@@ -216,8 +360,8 @@ frame.
 ```
 
 The suite covers signal helpers (including flat-signal and EMG guards), metrics
-and calibration percentiles, the intent state machine, and the exact wire
-format.
+and calibration percentiles, the intent state machine, the exact wire format,
+and the haptics config/driver/controller/serial protocol.
 
 ### Full end-to-end verification
 
@@ -235,7 +379,9 @@ It starts a throw-away backend in live mode on a free port and checks:
 3. a malformed frame is ignored without closing the socket,
 4. commands are delivered to the device socket,
 5. the device does not receive an echo of its own frames,
-6. the synthetic bridge produces ≥20 valid frames in 10 s with monotonic
+6. `POST /haptics/pulse` queues a command that reaches a connected haptics
+   device with the exact intensity/duration,
+7. the synthetic bridge produces ≥20 valid frames in 10 s with monotonic
    timestamps and all values in `[0, 1]`.
 
 Exit code `0` and `E2E VERIFICATION PASSED` mean the contract is intact.
@@ -251,6 +397,10 @@ Exit code `0` and `E2E VERIFICATION PASSED` mean the contract is intact.
 | Frames stop, bridge logs a read error | Board unplugged or the dongle reset. The bridge exits instead of hammering a dead board; replug and restart. |
 | Metrics pinned at 0 or 1 | Flat/railed signal, bad reference, or dry electrodes. Check impedances in the OpenBCI GUI first. |
 | Trigger fires while talking | Lower `NB_EMG_RATIO_THRESHOLD` sensitivity by raising the threshold, or increase `NB_EMG_FRAMES`. |
+| `could not open serial port COM4` | Close the Arduino Serial Monitor, check the port in Device Manager, or another program may own it. |
+| Dashboard says “No haptic device connected” | Start `nb_haptics`, check it points at the same backend as the selected source, and confirm `GET /devices` lists a connected `haptics` device. |
+| Haptics panel shows `429` | Wait for `HAPTIC_RATE_LIMIT_SECONDS` to elapse; repeated clicks are deliberately throttled. |
+| Serial pulse sent but motor does not move | Check MOSFET/driver wiring, motor supply, common ground, and PWM pin; test with `--check --pulse`. |
 
 ## Safety
 
